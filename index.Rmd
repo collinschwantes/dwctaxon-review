@@ -140,7 +140,7 @@ devtools::check(pkg_dir)
 
 <!-- record comments on checks here -->
 
-one error for failing test. `dct_add_row` throws an error. Seems like 
+one error for failing test. `dct_add_row` throws an error.
 
 ***
 
