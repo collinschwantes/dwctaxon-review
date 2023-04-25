@@ -22,7 +22,7 @@ This repo contains files associated with the **rOpenSci** review of
 ### see the review report [here:](https://collinschwantes.github.io/dwctaxon-review/index.nb.html)
 
 or view the submitted review to rOpenSci
-[here:](https://github.com/collinschwantes/dwctaxon-review/blob/master/pkgreview.md)
+[here:](https://github.com/collinschwantes/dwctaxon-review/blob/master/review.md)
 
 <br>
 
