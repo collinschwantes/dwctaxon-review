@@ -109,6 +109,10 @@ remove.packages("dwctaxon")
 
 <!-- record comments on local install here -->
 
+No issues with local install.
+
+No issues removing the package.
+
 ***
 
 ### test install of `dwctaxon` from GitHub with:
@@ -121,9 +125,9 @@ devtools::install_github("joelnitta/dwctaxon", dependencies = T, build_vignettes
 
 <!-- record comments on github install here -->
 
+No issues with github install.
+
 ***
-
-
 
 ## Check package integrity
 
@@ -136,6 +140,8 @@ devtools::check(pkg_dir)
 
 <!-- record comments on checks here -->
 
+one error for failing test. `dct_add_row` throws an error. Seems like 
+
 ***
 
 ### run tests on `dwctaxon` source:
@@ -146,6 +152,8 @@ devtools::test(pkg_dir)
 #### **comments:**
 
 <!-- record comments on tests here -->
+
+Throws 15 errors that all appear to have to do with expect_snapshot
 
 ***
 
@@ -158,6 +166,11 @@ goodpractice::gp(pkg_dir)
 #### **comments:**
 
 <!-- record comments on goodpractice here -->
+dct_modify_row_single has a lot of if statements that are nicely labelled in the function. Consider whether or not each of those sections of the function could be split into its own, smaller, easier to evaluate function. 
+
+You could also take advantage of `rlang::empty` to test if something is NA or
+NULL. 
+
 
 ***
 
@@ -179,6 +192,8 @@ devtools::spell_check(pkg_dir)
 
 <!-- record comments on metadata files here -->
 
+Metadata files look good!
+
 ***
 
 ## Check documentation
@@ -186,6 +201,7 @@ devtools::spell_check(pkg_dir)
 online documentation: **<https://joelnitta.github.io/dwctaxon/>**
 
 * Is the [documentation](https://ropensci.github.io/dev_guide/building.html#documentation) (installation instructions/vignettes/examples/demos) clear and sufficient?
+
 
 ### test `dwctaxon` function help files:
 
@@ -196,6 +212,8 @@ help(package = "dwctaxon")
 #### **comments:**
 
 <!-- record comments on help files here -->
+
+Help renders as expected.
 
 ***
 
@@ -209,15 +227,234 @@ vignette(package = "dwctaxon")
 
 <!-- record comments on vignettes here -->
 
+Vignettes start with an intro to darwin core then move on to the primary
+functions. They are easy to follow and well written. 
+
+
 ***
 
 ## Test functionality:
 
 - Are there **user interface improvements** that could be made?
+
+Certain functions create missing columns or provide errors for non-dct terms. Its not always obvious which functions will generate new columns, and which wont. See `dct_fill_col` vs `dct_add_row`
+
+Since there is an "add_row" style function, it may be worth including a drop_row
+  
+
+
 - Are there **performance improvements** that could be made?
 
-```{r free-style}
+Everything ran quickly.
+
+```{r free-style, eval=FALSE}
 library("dwctaxon")
+library(readxl)
+library(tidyverse)
+library(dwctaxon)
+library(taxize)
+library(purrr)
+library(tibble)
+
+# load in excel files ----
+
+ids <- read_xlsx(path = "2013 USDA Bee IDs.xlsx")
+
+## convert to long data
+id_list <- list()
+
+for(i in 1:length(ids)){
+  id_name <- stringr::str_to_lower(colnames(ids)[i])
+  id_name_taxa <- stringr::str_remove(id_name, pattern = "\\s*\\(.*\\)[\\.{,3}\\d*]*")
+  id_name_sex <- "not provided"
+  if(stringr::str_detect(id_name_taxa,pattern = "male|female")){
+    id_name_sex <- stringr::str_extract(string = id_name_taxa,pattern = "male|female")
+    id_name_taxa <- stringr::str_remove_all(string =id_name_taxa,pattern = sprintf("\\s*%s\\s*",id_name_sex))
+    id_name_sex <- stringr::str_to_lower(id_name_sex)
+  }
+  id_name_identifier_1 <- stringr::str_remove(id_name,pattern = sprintf("%s\\s",id_name_taxa))
+  id_name_identifier_2 <- stringr::str_remove(id_name_identifier_1,pattern = id_name_sex)
+  id_name_identifier_3 <- stringr::str_remove(id_name_identifier_2,pattern = "\\.{3}\\d+")
+  id_name_identifier_no_parens <- stringr::str_remove_all(id_name_identifier_3,pattern = "\\(|\\)")
+  ucmc_val <- ids[[i]]
+  ucmc_val_no_nas <- ucmc_val[!is.na(ucmc_val)]
+  ucmc_val_no_nas_fullucmc <- stringr::str_replace(string = ucmc_val_no_nas,pattern = "^CMC",replacement = "UCMC")
+  ucmc_val_no_UCMC <- stringr::str_remove_all(ucmc_val_no_nas_fullucmc,pattern = "UCMC ")
+
+  ucmc_val_no_UCMC_padded <- stringr::str_pad(trimws(ucmc_val_no_UCMC),width = 7,side = "left",pad = "0")
+
+
+  df <- tibble( "UCMC_NUMBER" = trimws(ucmc_val_no_UCMC_padded),
+                "TAXA" = trimws(id_name_taxa),
+                "SEX" = trimws(id_name_sex),
+                "IDENTIFIED_BY" = trimws(id_name_identifier_no_parens) )
+
+  id_list[[i]] <- df
+}
+
+id_df <- do.call(rbind,id_list)
+
+
+
+id_df_distinct <- id_df  %>%
+  distinct(UCMC_NUMBER,.keep_all = TRUE)
+
+
+# create dct dataset ----
+taxa_data <- id_df_distinct %>%
+  distinct(TAXA) %>%
+  mutate(TAXA = stringr::str_to_sentence(TAXA)) %>%
+  rename("scientificName" = "TAXA")
+
+# check that names are properly formatted
+sci_name_check <- dwctaxon::dct_check_sci_name(taxa_data,quiet = FALSE)
+
+## check that auto fill functions work
+taxa_data <-taxa_data %>%
+  mutate(taxonomicStatus = "accepted")
+
+tsn_ids <- taxize::get_tsn(sci_com = taxa_data$scientificName,searchtype = "scientific")
+tax_not_found <- attributes(tsn_ids)$match == "not found"
+
+taxa_data$scientificName[tax_not_found]
+
+tsn_rank <- taxize::classification(tsn_ids,db = "itis")
+
+
+
+tsn_rank_most_precise <- purrr::map_dfr(tsn_rank,function(x){
+  df <- tibble(name = NA,
+               rank = NA,
+               id = NA)
+  if(is.data.frame(x)){
+    df <- tail(x,1)
+  }
+  return(df)
+})
+
+
+
+# test vignettes ----
+dwc_data <- cbind(taxa_data,tsn_rank_most_precise)
+
+dwc_data_terms <- dwc_data %>%
+  rename("UCMC_name" = "scientificName") %>%
+  rename("scientificName" = "name",
+         "taxonRank" = "rank",
+         "taxonID" = "id")
+
+# start validation process
+
+## add a row manually
+## add honey bees and cemolobus
+
+## I would like there to be a warning/message that taxon ids are autogenerated
+
+dwc_data_add_row <- dwc_data_terms |>
+  dct_add_row(
+    scientificName = c("Apis mellifera", "Cemolobus ipomoeae"),
+    taxonomicStatus = "accepted",
+    taxonRank = "species"
+  )
+
+
+## add a dataframe
+
+data_to_add <- tibble(scientificName = c("Agapostemon texanus","Agapostemon virescens"),
+                      taxonomicStatus = "accepted",
+                      taxonRank = "species")
+
+dwc_data_add_df <- dwc_data_add_row %>%
+  dct_add_row(new_dat = data_to_add)
+
+### modify row
+
+"Unlike add row, or add data frame, modify row rearranges the columns to a
+different order. It will not add dct terms that are missing in the original
+dataset."
+
+dwc_data_add_df |>
+  filter(!is.na(taxonID)) %>%
+  dct_modify_row(
+    taxonID = "5ac64c9b", # taxonID of Trichomanes crassum Copel.
+    tax_status = "synonym",
+   # acceptedNameUsageID = "72625a44" # won't add in the column automatically
+  )
+
+## add another term and test autocomplete
+
+dwc_data_add_df$acceptedNameUsageID <- NA
+
+dwc_data_mod_row <- dwc_data_add_df |>
+  dct_add_row(
+    taxonID = "fakeId0099", # fake taxonID
+    tax_status = "synonym",
+    acceptedNameUsageID = "5ac64c9b", # taxonID of Agapostemon virescens
+    scientificName = "Agapostemon inventatus",
+    taxonRank = "species"
+  )
+
+# check modifying a synonym updates other objects
+dwc_data_mod_row_test <- dwc_data_mod_row %>%
+  filter(!is.na(taxonID)) %>%
+  dct_modify_row(
+    taxonID = "5ac64c9b", # taxonID of Agapostemon texanus
+    tax_status = "synonym",
+    acceptedNameUsageID = "72625a44" # taxonID of Agapostemon virescens
+    )
+
+## Check the filling function
+
+"This function does append new columns "
+dwc_data_mod_fill_test <- dwc_data_mod_row_test %>%
+  dct_fill_col(
+    fill_to = "acceptedNameUsage",
+    fill_from = "scientificName",
+    match_to = "taxonID",
+    match_from = "acceptedNameUsageID"
+  )
+
+tail(dwc_data_mod_fill_test)
+
+
+"requires from column to a DWC term"
+dwc_data_mod_fill_test_2 <- dwc_data_mod_row_test %>%
+  dct_fill_col(
+    fill_to = "acceptedNameUsage",
+    fill_from = "nothing",
+    match_to = "taxonID",
+    match_from = "acceptedNameUsageID"
+  )
+
+"no warning/error if the from field doesnt exist"
+dwc_data_mod_fill_test_3 <- dwc_data_mod_row_test %>%
+  dct_fill_col(
+    fill_to = "scientificName",
+    fill_from = "acceptedNameUsage",
+    match_to = "taxonID",
+    match_from = "acceptedNameUsageID"
+  )
+tail(dwc_data_mod_fill_test_2)
+
+
+
+## validate
+
+dct_validate(dwc_data_mod_fill_test_3)
+
+"found duplicate entries"
+"did not mention non-dct terms"
+
+# with summary param
+dct_validate(dwc_data_mod_fill_test_3,on_fail = "summary")
+"found bad column name"
+"is there a row drop function?"
+
+
+dwc_data_mod_fill_test_3 %>%
+  dct_check_mapping(on_success = "logical")
+
+
 ```
 
 ```{r parse-functions}
@@ -229,6 +466,13 @@ exports
 
 ```{r exp-chunk}
 
+dct_fake <- tibble(taxonID = "111111",taxonomicStatus = "accepted", taxonRank = "species",scientificName = "Inventatum ficticious")
+
+## acceptedNameUsage doesnt exist in the dataset but can be used as a fill_from argument
+
+dct_fake |>
+  dct_add_row(taxon_id = "777777",sci_name = "Fechum arribus",tax_status = "accepted") |>
+  dct_fill_col(fill_to = "scientificName",fill_from = "acceptedNameUsage",   match_to = "acceptedNameUsageID",match_from = "taxonID")
 
 ```
 
@@ -236,13 +480,14 @@ exports
 
 <!-- record comments on package experimentation here -->
 
+`dct_fill_col` does not throw an error if the `fill_from` argument is a non-existent column that is a dct_term
 ***
 
 ## Inspect code:
 
 - Does the package **comply with the [ROpenSci packaging guide](https://ropensci.github.io/dev_guide/building.html)**?
     * good [function & variable naming?](https://ropensci.github.io/dev_guide/building.html#function-and-argument-naming)
-    * good [dependency management](https://ropensci.github.io/dev_guide/building.html#package-dependencies)?
+    * good [dependency management](https://ropensci.github.io/dev_guide/building.html#package-dependencies)?  
 - Are there **improvements** that could be made to the [**code style?**](https://ropensci.github.io/dev_guide/building.html#code-style)
 - Is there **code duplication** in the package that should be reduced?
 
@@ -259,6 +504,9 @@ pkgreviewr::pkgreview_print_source("dwctaxon")
 
 <!-- record comments on package source code here -->
 
+Dependencies could include minimum version numbers in the description file
+
+[assertr] appears to have a single function call, is it worth adding the whole package as a dependency? 
 
 ## Review test suite:
 
@@ -277,6 +525,11 @@ covr::package_coverage(pkg_dir)
 #### **comments:**
 
 <!-- record comments on testing suite here -->
+
+`dct_options`  has low coverage. Consider expanding coverage based on the
+types of values options can accept. 
+
+
 
 
 ***
